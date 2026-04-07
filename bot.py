@@ -32,7 +32,7 @@ REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "").strip()
 # Agar kanal private bo'lsa, kanal ID'sini kiriting (masalan: -1001234567890)
 REQUIRED_CHANNEL_ID = os.getenv("REQUIRED_CHANNEL_ID", "").strip()
 
-DB_FILE = "/app/data/movies.json"
+DB_FILE = "movies.json"
 
 # === Logging ===
 logging.basicConfig(
