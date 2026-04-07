@@ -144,6 +144,13 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
+async def clear_all_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Siz admin emassiz.")
+        return
+    save_movies({})  # bo'sh lug'at saqlaydi
+    await update.message.reply_text("🗑 Barcha kinolar o'chirildi!")
+
 async def add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Siz admin emassiz.")
