@@ -1,3 +1,4 @@
+import shutil
 from telegram import InlineQueryResultCachedVideo
 import json
 import os
@@ -16,6 +17,43 @@ from telegram.ext import (
     InlineQueryHandler, filters, ContextTypes
 )
 from telegram.constants import ParseMode, ChatMemberStatus
+
+def ensure_db_file():
+    """DB_FILE fayl ekanligini kafolatlaydi. Agar papka bo'lsa, o'chiradi."""
+    if os.path.exists(DB_FILE):
+        if os.path.isdir(DB_FILE):
+            # Papkani o'chirib tashlaymiz
+            os.rmdir(DB_FILE)  # agar bo'sh bo'lsa
+            # Agar bo'sh bo'lmasa, kuch bilan o'chirish
+            import shutil
+            shutil.rmtree(DB_FILE)
+            logger.warning(f"{DB_FILE} papka edi, o'chirildi.")
+    # Papka yo'qligiga ishonch hosil qilib, fayl yaratamiz
+    db_dir = os.path.dirname(DB_FILE)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+    if not os.path.exists(DB_FILE):
+        with open(DB_FILE, 'w', encoding='utf-8') as f:
+            json.dump({}, f)
+
+def load_movies():
+    ensure_db_file()
+    try:
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Baza o'qishda xatolik: {e}")
+        return {}
+
+def save_movies(movies):
+    ensure_db_file()
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(movies, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        logger.error(f"Baza saqlashda xatolik: {e}")
+        return False
 
 # === Muhit o'zgaruvchilari ===
 load_dotenv()
