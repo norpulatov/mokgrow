@@ -5,6 +5,7 @@ import os
 import logging
 import re
 from uuid import uuid4
+import httpx
 from dotenv import load_dotenv
 from telegram import (
     Update, 
@@ -27,13 +28,15 @@ if not TOKEN:
 admin_ids_str = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip().isdigit()]
 
-# === MAJBURIY KANAL SOZLAMALARI ===
-# Kanal username'sini @ belgisiz kiriting (masalan: "my_channel")
 REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "").strip()
-# Agar kanal private bo'lsa, kanal ID'sini kiriting (masalan: -1001234567890)
 REQUIRED_CHANNEL_ID = os.getenv("REQUIRED_CHANNEL_ID", "").strip()
 
-DB_FILE = "/app/data/movies.json"
+# GitHub Gist sozlamalari (agar ishlatilsa)
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GIST_ID = os.getenv("GIST_ID", "").strip()
+
+# Agar Volume ishlatilsa, DB_FILE shu yo'lda
+DB_FILE = os.getenv("DB_FILE", "/app/data/movies.json")  # yoki oddiy "movies.json"
 
 # === Logging ===
 logging.basicConfig(
@@ -42,102 +45,164 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Ma'lumotlar bazasi ===
-def load_movies():
-    if not os.path.exists(DB_FILE):
-        return {}
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Baza o'qishda xatolik: {e}")
-        return {}
+# === Ma'lumotlar bazasi funksiyalari (GitHub Gist yoki mahalliy fayl) ===
+# Agar GITHUB_TOKEN bo'lsa, Gist ishlatiladi, aks holda mahalliy fayl
+USE_GIST = bool(GITHUB_TOKEN)
 
-def save_movies(movies):
-    try:
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(movies, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        logger.error(f"Baza saqlashda xatolik: {e}")
-        return False
+if USE_GIST:
+    async def load_movies_async():
+        if not GITHUB_TOKEN:
+            return {}
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        async with httpx.AsyncClient() as client:
+            if not GIST_ID:
+                data = {
+                    "description": "Kino bot ma'lumotlari",
+                    "public": False,
+                    "files": {"movies.json": {"content": json.dumps({})}}
+                }
+                resp = await client.post("https://api.github.com/gists", headers=headers, json=data)
+                if resp.status_code == 201:
+                    gist_id = resp.json()["id"]
+                    logger.info(f"Yangi Gist yaratildi: {gist_id}")
+                    global GIST_ID
+                    GIST_ID = gist_id
+                    return {}
+                else:
+                    logger.error(f"Gist yaratishda xatolik: {resp.text}")
+                    return {}
+            else:
+                resp = await client.get(f"https://api.github.com/gists/{GIST_ID}", headers=headers)
+                if resp.status_code == 200:
+                    gist = resp.json()
+                    content = gist["files"]["movies.json"]["content"]
+                    return json.loads(content) if content.strip() else {}
+                else:
+                    logger.error(f"Gist o'qishda xatolik: {resp.text}")
+                    return {}
+
+    async def save_movies_async(movies):
+        if not GITHUB_TOKEN or not GIST_ID:
+            return False
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        data = {"files": {"movies.json": {"content": json.dumps(movies, ensure_ascii=False, indent=2)}}}
+        async with httpx.AsyncClient() as client:
+            resp = await client.patch(f"https://api.github.com/gists/{GIST_ID}", headers=headers, json=data)
+            if resp.status_code == 200:
+                return True
+            else:
+                logger.error(f"Gist yozishda xatolik: {resp.text}")
+                return False
+
+    import asyncio
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    def load_movies():
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return loop.run_until_complete(load_movies_async())
+            else:
+                return asyncio.run(load_movies_async())
+        except RuntimeError:
+            return asyncio.run(load_movies_async())
+
+    def save_movies(movies):
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return loop.run_until_complete(save_movies_async(movies))
+            else:
+                return asyncio.run(save_movies_async(movies))
+        except RuntimeError:
+            return asyncio.run(save_movies_async(movies))
+else:
+    # Mahalliy fayl rejimi
+    def load_movies():
+        if not os.path.exists(DB_FILE):
+            return {}
+        try:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Baza o'qishda xatolik: {e}")
+            return {}
+
+    def save_movies(movies):
+        try:
+            os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+            with open(DB_FILE, "w", encoding="utf-8") as f:
+                json.dump(movies, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"Baza saqlashda xatolik: {e}")
+            return False
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-# === Obuna tekshirish funksiyasi ===
+# === Obuna tekshirish ===
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Foydalanuvchi kerakli kanalga a'zo yoki yo'qligini tekshiradi."""
     if not REQUIRED_CHANNEL and not REQUIRED_CHANNEL_ID:
-        return True  # Agar kanal sozlanmagan bo'lsa, hammaga ruxsat
-
+        return True
     chat_id = REQUIRED_CHANNEL_ID if REQUIRED_CHANNEL_ID else f"@{REQUIRED_CHANNEL}"
     try:
         member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-        # Left yoki kicked bo'lsa, a'zo emas
         if member.status in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED]:
             return False
         return True
     except Exception as e:
         logger.error(f"Obuna tekshirishda xatolik: {e}")
-        # Xatolik bo'lsa, xavfsizlik uchun ruxsat bermaslik
-        return False
+        return True  # Xatolikda ruxsat beramiz
 
 async def require_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Har bir buyruq oldidan obunani tekshiradi va kerak bo'lsa xabar ko'rsatadi."""
+    if not REQUIRED_CHANNEL and not REQUIRED_CHANNEL_ID:
+        return True
     user_id = update.effective_user.id
-    if await check_subscription(user_id, context):
+    try:
+        if await check_subscription(user_id, context):
+            return True
+    except Exception:
         return True
 
-    # Obuna bo'lmaganlar uchun tugma
     keyboard = []
     if REQUIRED_CHANNEL:
         keyboard.append([InlineKeyboardButton("📢 Kanalga o'tish", url=f"https://t.me/{REQUIRED_CHANNEL}")])
-    elif REQUIRED_CHANNEL_ID:
-        # Private kanal uchun havola bera olmaymiz, faqat ogohlantirish
-        pass
-
     keyboard.append([InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    text = (
-        "⛔ *Kechirasiz, botdan foydalanish uchun kanalimizga obuna bo'lishingiz kerak!*\n\n"
-        
-    )
+    text = "⛔ Botdan foydalanish uchun kanalimizga obuna bo'ling!\n\nObuna bo'lgach \"✅ Tekshirish\" tugmasini bosing."
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
     elif update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(text, reply_markup=reply_markup)
     elif update.inline_query:
-        # Inline so'rovlarga javob bermaslik uchun bo'sh qaytaramiz
         await update.inline_query.answer([], switch_pm_text="Botdan foydalanish uchun kanalga obuna bo'ling", switch_pm_parameter="subscribe")
     return False
 
-# === Obunani qayta tekshirish uchun callback handler ===
 async def check_subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = update.effective_user.id
-
     if await check_subscription(user_id, context):
         await query.edit_message_text("✅ Rahmat! Endi botdan foydalanishingiz mumkin.\nBoshlash uchun /start")
     else:
         await query.answer("❌ Siz hali kanalga obuna bo'lmadingiz!", show_alert=True)
 
-# === Asosiy handlerlar (obuna tekshiruvi bilan) ===
+# === Foydalanuvchi handlerlari ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Majburiy obuna tekshiruvi (agar kerak bo'lsa)
     if not await require_subscription(update, context):
         return
-
     user = update.effective_user
     first_name = user.first_name if user.first_name else "foydalanuvchi"
-
     await update.message.reply_text(
         f"👋 Assalomu alaykum, {first_name}, botimizga xush kelibsiz\n\n"
-        "🎥 Bot orqali siz sevimli filmlar, seriallar va multfilmlarni sifatli formatda ko'rishingiz mumkin"
+        "🎥 Bot orqali siz sevimli filmlar, seriallar va multfilmlarni sifatli formatda ko'rishingiz mumkin\n"
+        "Kinolar ro'yxatini /movies buyrug'i bilan oling."
     )
+
 async def movies_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update, context):
         return
@@ -146,39 +211,47 @@ async def movies_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 Hozircha kino mavjud emas.")
         return
 
-    keyboard = []
-    for title, file_id in movies.items():
-        keyboard.append([InlineKeyboardButton(f"🎬 {title}", callback_data=f"get_{file_id}")])
+    # Kinolarni raqamlab chiqamiz
+    movie_titles = list(movies.keys())
+    text = "📋 *Mavjud kinolar:*\n"
+    for idx, title in enumerate(movie_titles, 1):
+        text += f"{idx}. {title}\n"
+    text += "\nKerakli kino raqamini yuboring."
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
-    await update.message.reply_text(
-        "📋 *Mavjud kinolar:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode=ParseMode.MARKDOWN
-    )
+async def handle_number_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Foydalanuvchi raqam yuborsa, shu raqamdagi kinoni yuboradi."""
+    # Admin kino qo'shayotgan bo'lsa, aralashmaymiz
+    if context.user_data.get("awaiting_movie"):
+        return
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
+    if not update.message or not update.message.text:
+        return
+    text = update.message.text.strip()
+    if not text.isdigit():
+        return
 
-    # Obuna tekshiruvi
-    if data.startswith("get_"):
-        if not await require_subscription(update, context):
-            return
-        file_id = data[4:]
-        try:
-            await context.bot.send_video(
-                chat_id=query.message.chat_id,
-                video=file_id,
-                caption="✅ Kino tayyor!",
-                protect_content=True
-            )
-            await query.edit_message_text("✅ Kino yuborildi!")
-        except Exception as e:
-            logger.error(f"Video yuborishda xatolik: {e}")
-            await query.edit_message_text("❌ Kechirasiz, video yuborishda xatolik.")
+    if not await require_subscription(update, context):
+        return
 
-# === Inline qidiruv (obuna tekshiruvi) ===
+    movies = load_movies()
+    if not movies:
+        await update.message.reply_text("📭 Hozircha kino mavjud emas.")
+        return
+
+    movie_titles = list(movies.keys())
+    try:
+        index = int(text) - 1
+        if 0 <= index < len(movie_titles):
+            title = movie_titles[index]
+            file_id = movies[title]
+            await update.message.reply_video(video=file_id, caption=f"🎬 {title}")
+        else:
+            await update.message.reply_text("❌ Bunday raqamli kino yo'q.")
+    except Exception as e:
+        logger.error(f"Raqamli xabarda xatolik: {e}")
+
+# Inline qidiruv (ixtiyoriy)
 async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update, context):
         return
@@ -207,36 +280,29 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         caption=f"🎬 {title}",
                     )
                 )
-
     await update.inline_query.answer(results, cache_time=5)
 
-# === Admin funksiyalari (obuna tekshirilmaydi) ===
+# === Admin funksiyalari ===
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Siz admin emassiz.")
         return
     text = (
-        "👨‍💻 *Admin buyruqlari:*\n"
-        "/addmovie - Yangi kino qo'shish (video forward yoki link)\n"
-        "/delete `nomi` - Kino o'chirish\n"
+        "/addmovie - Yangi kino qo'shish\n"
+        "/delete nomi - Kino o'chirish\n"
         "/list - Barcha kinolar ro'yxati\n"
-        "/cancel - Kino qo'shishni bekor qilish\n"
-        "/adminhelp - Ushbu yordam"
+        "/cancel - Bekor qilish"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(text)
 
 async def add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Siz admin emassiz.")
         return
-
     await update.message.reply_text(
-        "📤 Iltimos, quyidagilardan birini yuboring:\n"
-        "1️⃣ Kanalda joylangan video xabarini *forward* qiling.\n"
-        "2️⃣ Kanal posti linkini yuboring (masalan: https://t.me/kanal/123).\n\n"
-        "Xabar izohiga (caption) kino nomini yozing.\n"
-        "❌ Bekor qilish uchun /cancel",
-        parse_mode=ParseMode.MARKDOWN
+        "📤 Video xabarini forward qiling yoki kanal posti linkini yuboring.\n"
+        "Xabar izohiga kino nomini yozing.\n"
+        "❌ Bekor qilish uchun /cancel"
     )
     context.user_data["awaiting_movie"] = True
 
@@ -345,7 +411,7 @@ async def list_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 Kino yo'q.")
     else:
         text = "\n".join([f"• {t}" for t in movies.keys()])
-        await update.message.reply_text(f"📋 *Kinolar:*\n{text}", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"📋 Kinolar:\n{text}")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(msg="Xatolik:", exc_info=context.error)
@@ -353,28 +419,28 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # Obuna tekshirish callback
+    # Callback handlerlar
     app.add_handler(CallbackQueryHandler(check_subscription_callback, pattern="^check_sub$"))
-
-    # Foydalanuvchi handlerlari (obuna tekshiruvi ularning ichida)
+    
+    # Foydalanuvchi buyruqlari
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("movies", movies_list))
-    app.add_handler(CallbackQueryHandler(button_handler, pattern="^get_"))
     app.add_handler(InlineQueryHandler(inline_query))
-
-    # Admin handlerlari (obuna tekshirilmaydi)
+    
+    # Raqamli xabarlar (admin jarayonida bo'lmasa)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_number_message))
+    
+    # Admin handlerlari
     app.add_handler(CommandHandler("addmovie", add_movie_start))
     app.add_handler(CommandHandler("delete", delete_movie))
     app.add_handler(CommandHandler("list", list_admin))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CommandHandler("adminhelp", admin_help))
-
-    # Forward/link uchun (faqat admin)
     app.add_handler(MessageHandler(
         filters.TEXT | filters.FORWARDED | filters.VIDEO | filters.Document.ALL,
         handle_admin_message
     ))
-
+    
     app.add_error_handler(error_handler)
 
     logger.info("Bot ishga tushmoqda...")
