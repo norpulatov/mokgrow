@@ -126,16 +126,17 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
 
 # === Asosiy handlerlar (obuna tekshiruvi bilan) ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Majburiy obuna tekshiruvi (agar kerak bo'lsa)
     if not await require_subscription(update, context):
         return
-    await update.message.reply_text(
-        "👋 *Assalomu alaykum, botimizga xush kelibsiz*\n\n"
-        "🎥 *Bot orqali siz sevimli filmlar, seriallar va multfilmlarni sifatli formatda ko'rishingiz mumkin\n"
-        "Yoki istalgan chatda `@Mokgrowbot kino` deb yozib qidiring.\n\n"
-        ,
-        parse_mode=ParseMode.MARKDOWN
-    )
 
+    user = update.effective_user
+    first_name = user.first_name if user.first_name else "foydalanuvchi"
+
+    await update.message.reply_text(
+        f"👋 Assalomu alaykum, {first_name}, botimizga xush kelibsiz\n\n"
+        "🎥 Bot orqali siz sevimli filmlar, seriallar va multfilmlarni sifatli formatda ko'rishingiz mumkin"
+    )
 async def movies_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update, context):
         return
