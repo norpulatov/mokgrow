@@ -101,7 +101,7 @@ async def require_subscription(update: Update, context: ContextTypes.DEFAULT_TYP
 
     text = (
         "⛔ *Kechirasiz, botdan foydalanish uchun kanalimizga obuna bo'lishingiz kerak!*\n\n"
-        "Obuna bo'lgandan so'ng \"✅ Tekshirish\" tugmasini bosing."
+        
     )
 
     if update.callback_query:
@@ -129,10 +129,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_subscription(update, context):
         return
     await update.message.reply_text(
-        "🎬 *Kino Botiga xush kelibsiz!*\n\n"
-        "Kinolar ro'yxatini ko'rish uchun /movies buyrug'ini bosing.\n"
-        "Yoki istalgan chatda `@sizning_bot_username kino` deb yozib qidiring.\n\n"
-        "👨‍💻 Adminlar kino qo'shishlari mumkin: /adminhelp",
+        "👋 *Assalomu alaykum, botimizga xush kelibsiz*\n\n"
+        "🎥 *Bot orqali siz sevimli filmlar, seriallar va multfilmlarni sifatli formatda ko'rishingiz mumkin\n"
+        "Yoki istalgan chatda `@Mokgrowbot kino` deb yozib qidiring.\n\n"
+        ,
         parse_mode=ParseMode.MARKDOWN
     )
 
