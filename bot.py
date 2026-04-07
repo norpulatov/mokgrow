@@ -58,8 +58,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 *Kino Botiga xush kelibsiz!*\n\n"
         "Kinolar ro'yxatini ko'rish uchun /movies buyrug'ini bosing.\n"
-        "Yoki istalgan chatda `@sizning_bot_username kino` deb yozib qidiring.\n\n"
-        "👨‍💻 Adminlar kino qo'shishlari mumkin: /adminhelp",
+        "Yoki istalgan chatda `@Bot_username kino` deb yozib qidiring.\n\n",
         parse_mode=ParseMode.MARKDOWN
     )
 
