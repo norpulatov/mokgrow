@@ -1,10 +1,10 @@
-from telegram import InlineQueryResultCachedVideo
 import json
 import os
 import logging
+from uuid import uuid4
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineQueryResultCachedVideo
+from telegram.ext import Application, CommandHandler, MessageHandler, InlineQueryHandler, filters, ContextTypes
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -34,7 +34,8 @@ def is_admin(user_id: int) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Assalomu alaykum! Kino botiga xush kelibsiz.\n"
-        "Kinolar ro'yxatini /movies buyrug'i bilan oling."
+        "Kinolar ro'yxatini /movies buyrug'i bilan oling.\n"
+        "Yoki istalgan chatda @Mokgrowbot kino_nomi deb qidiring."
     )
 
 async def movies_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -51,7 +52,6 @@ async def movies_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def handle_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Foydalanuvchi faqat raqam yuborsa ishlaydi."""
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip()
@@ -72,6 +72,38 @@ async def handle_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Bunday raqamli kino yo'q.")
 
+# === Inline qidiruv ===
+async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.inline_query.query.strip()
+    movies = load_movies()
+    results = []
+
+    if not query:
+        # Bo'sh so'rov bo'lsa, dastlabki 10 ta kinoni ko'rsatamiz
+        for title, file_id in list(movies.items())[:10]:
+            results.append(
+                InlineQueryResultCachedVideo(
+                    id=str(uuid4()),
+                    video_file_id=file_id,
+                    title=title,
+                    caption=f"🎬 {title}",
+                )
+            )
+    else:
+        # Kino nomiga qarab filtrlaymiz
+        for title, file_id in movies.items():
+            if query.lower() in title.lower():
+                results.append(
+                    InlineQueryResultCachedVideo(
+                        id=str(uuid4()),
+                        video_file_id=file_id,
+                        title=title,
+                        caption=f"🎬 {title}",
+                    )
+                )
+
+    await update.inline_query.answer(results, cache_time=10)
+
 # === Admin ===
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -90,7 +122,6 @@ async def add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_movie"] = True
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin video yuborganda."""
     if not is_admin(update.effective_user.id):
         return
     if not context.user_data.get("awaiting_movie"):
@@ -161,6 +192,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("movies", movies_list))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_number))
+    app.add_handler(InlineQueryHandler(inline_query))  # <-- inline qidiruv
 
     app.add_handler(CommandHandler("addmovie", add_movie_start))
     app.add_handler(CommandHandler("delete", delete_movie))
