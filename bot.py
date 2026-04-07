@@ -1,10 +1,9 @@
 import json
 import os
 import logging
-from uuid import uuid4
 from dotenv import load_dotenv
-from telegram import Update, InlineQueryResultArticle, InputTextMessageContent
-from telegram.ext import Application, CommandHandler, MessageHandler, InlineQueryHandler, filters, ContextTypes
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -34,8 +33,7 @@ def is_admin(user_id: int) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Assalomu alaykum! Kino botiga xush kelibsiz.\n"
-        "Kinolar ro'yxatini /movies buyrug'i bilan oling.\n"
-        "Yoki istalgan chatda @sizning_bot_username kino_nomi deb qidiring."
+        "Kinolar ro'yxatini /movies buyrug'i bilan oling."
     )
 
 async def movies_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,6 +50,7 @@ async def movies_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def handle_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Foydalanuvchi faqat raqam yuborsa ishlaydi."""
     if not update.message or not update.message.text:
         return
     text = update.message.text.strip()
@@ -68,68 +67,9 @@ async def handle_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 0 <= idx < len(titles):
         title = titles[idx]
         file_id = movies[title]
-        try:
-            await update.message.reply_video(video=file_id, caption=f"🎬 {title}")
-        except Exception as e:
-            logger.error(f"Video yuborishda xatolik: {e}")
-            await update.message.reply_text("❌ Kino yuborishda xatolik. Iltimos, adminga murojaat qiling.")
+        await update.message.reply_video(video=file_id, caption=f"🎬 {title}")
     else:
         await update.message.reply_text("❌ Bunday raqamli kino yo'q.")
-
-# === Inline qidiruv (xatoliksiz) ===
-async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.inline_query.query.strip().lower()
-    movies = load_movies()
-    results = []
-
-    if not movies:
-        await update.inline_query.answer([], switch_pm_text="Kinolar ro'yxati", switch_pm_parameter="movies")
-        return
-
-    # Kinolarni nomiga qarab saralaymiz
-    matched_titles = []
-    for title in movies.keys():
-        if query in title.lower():
-            matched_titles.append(title)
-
-    # Agar so'rov bo'sh bo'lsa yoki mos keluvchi topilmasa, dastlabki 10 ta kinoni ko'rsatamiz
-    if not query or not matched_titles:
-        matched_titles = list(movies.keys())[:10]
-
-    for idx, title in enumerate(matched_titles):
-        results.append(
-            InlineQueryResultArticle(
-                id=str(uuid4()),
-                title=f"🎬 {title}",
-                description="Kino yuborish uchun tanlang",
-                input_message_content=InputTextMessageContent(
-                    message_text=f"/get_{title}"  # maxsus buyruq orqali yuboramiz
-                )
-            )
-        )
-
-    await update.inline_query.answer(results, cache_time=5)
-
-# === Inline orqali kino yuborish uchun handler ===
-async def get_movie_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inline tanlanganda yuboriladigan maxfiy buyruq."""
-    if not update.message or not update.message.text:
-        return
-    cmd = update.message.text.strip()
-    if not cmd.startswith("/get_"):
-        return
-
-    title = cmd[5:]  # "/get_" ni olib tashlaymiz
-    movies = load_movies()
-    if title in movies:
-        file_id = movies[title]
-        try:
-            await update.message.reply_video(video=file_id, caption=f"🎬 {title}")
-        except Exception as e:
-            logger.error(f"Video yuborishda xatolik: {e}")
-            await update.message.reply_text("❌ Kino yuborishda xatolik.")
-    else:
-        await update.message.reply_text("❌ Kino topilmadi.")
 
 # === Admin ===
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -149,6 +89,7 @@ async def add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_movie"] = True
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin video yuborganda."""
     if not is_admin(update.effective_user.id):
         return
     if not context.user_data.get("awaiting_movie"):
@@ -218,9 +159,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("movies", movies_list))
-    app.add_handler(CommandHandler("get", get_movie_command))  # maxsus buyruq
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_number))
-    app.add_handler(InlineQueryHandler(inline_query))
 
     app.add_handler(CommandHandler("addmovie", add_movie_start))
     app.add_handler(CommandHandler("delete", delete_movie))
